@@ -8,7 +8,7 @@ better-profanity==0.7.0
 billiard==4.2.2
 celery==5.5.3
 certifi==2025.11.12
-cffi==2.0.0
+cffi
 channels==4.0.0
 channels-redis==4.1.0
 charset-normalizer==3.4.4
@@ -39,10 +39,10 @@ incremental==24.7.2
 kombu==5.5.4
 msgpack==1.1.2
 packaging==25.0
-pillow==10.2.0
+pillow>=10.4.0
 promise==2.3
 prompt_toolkit==3.0.52
-psycopg2-binary==2.9.9
+psycopg2-binary==2.9.12
 pyasn1==0.6.1
 pyasn1_modules==0.4.2
 pycparser==2.23
