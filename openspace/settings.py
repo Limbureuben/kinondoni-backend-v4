@@ -49,7 +49,9 @@ else:
 
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-az!-qw*3r32ng7r7hs*wphv5k^8)9eaju6bf3m32f*m1gq0arz')
+SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-local-development-only')
+if ENVIRONMENT == 'production' and SECRET_KEY == 'django-insecure-local-development-only':
+    raise RuntimeError('SECRET_KEY must be set in production')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
@@ -61,7 +63,14 @@ if ENVIRONMENT == 'production':
 # Environment indicator
 ENVIRONMENT_NAME = ENVIRONMENT.upper()
 
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '*').split(',')
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+    if host.strip()
+]
+for internal_host in ('localhost', '127.0.0.1'):
+    if internal_host not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(internal_host)
 
 
 # Application definition
@@ -89,6 +98,7 @@ SITE_ID = 1
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -142,8 +152,8 @@ if ENVIRONMENT == 'production':
             'NAME': os.getenv('POSTGRES_DB','openspace_prod'),
             'USER': os.getenv('POSTGRES_USER','openspace_user'),
             'PASSWORD': os.getenv('POSTGRES_PASSWORD','db_password'),
-            'HOST': os.getenv('DATABASE_HOST', 'db'),
-            'PORT': os.getenv('DATABASE_PORT', '5432'),
+            'HOST': os.getenv('DATABASE_HOST', os.getenv('DB_HOST', 'db')),
+            'PORT': os.getenv('DATABASE_PORT', os.getenv('DB_PORT', '5432')),
         }
     }
 elif ENVIRONMENT == 'development' and os.getenv('DB_HOST'):
@@ -205,6 +215,14 @@ USE_TZ = True
 
 STATIC_URL = '/static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+STORAGES = {
+    'default': {
+        'BACKEND': 'django.core.files.storage.FileSystemStorage',
+    },
+    'staticfiles': {
+        'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
+    },
+}
 
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
@@ -271,15 +289,20 @@ else:
     CORS_ALLOW_ALL_ORIGINS = True
 
 CORS_ALLOW_CREDENTIALS = True
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv('CSRF_TRUSTED_ORIGINS', os.getenv('CORS_ALLOWED_ORIGINS', '')).split(',')
+    if origin.strip()
+]
 
 # Email Configuration
 EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'django.core.mail.backends.smtp.EmailBackend')
 EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
 EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'True') == 'True'
-EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', 'limbureubenn@gmail.com')
-EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', 'egzcwbpkggcaadkr')
-DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'limbureubenn@gmail.com')
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER or 'webmaster@localhost')
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:4200')
 BACKEND_URL = os.getenv('BACKEND_URL', 'http://127.0.0.1:8000')
 
@@ -323,21 +346,22 @@ if ENVIRONMENT == 'production':
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
     X_FRAME_OPTIONS = 'DENY'
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    USE_X_FORWARDED_HOST = True
     
     # Production logging
     LOGGING = {
         'version': 1,
         'disable_existing_loggers': False,
         'handlers': {
-            'file': {
+            'console': {
                 'level': 'INFO',
-                'class': 'logging.FileHandler',
-                'filename': '/app/logs/django.log',
+                'class': 'logging.StreamHandler',
             },
         },
         'loggers': {
             'django': {
-                'handlers': ['file'],
+                'handlers': ['console'],
                 'level': 'INFO',
                 'propagate': True,
             },

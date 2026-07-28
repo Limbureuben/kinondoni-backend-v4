@@ -1,31 +1,19 @@
-#!/bin/bash
-set -e
+#!/bin/sh
+set -eu
 
-echo "========================================="
-echo " Starting OpenSpace Production"
-echo "========================================="
-
-echo "Waiting for PostgreSQL..."
-while ! nc -z db 5432; do
-  sleep 0.3
+echo "Waiting for the database and applying migrations..."
+attempt=1
+until python manage.py migrate --noinput; do
+    if [ "$attempt" -ge 30 ]; then
+        echo "Database was not ready after 30 attempts."
+        exit 1
+    fi
+    attempt=$((attempt + 1))
+    sleep 2
 done
-echo "PostgreSQL ready!"
-
-echo "Waiting for Redis..."
-while ! nc -z redis 6379; do
-  sleep 0.3
-done
-echo "Redis ready!"
-
-echo "Running database migrations..."
-python manage.py migrate --noinput
 
 echo "Collecting static files..."
 python manage.py collectstatic --noinput
 
-echo "========================================="
-echo " Entrypoint complete. Starting Gunicorn..."
-echo "========================================="
-
-# Hand over to CMD from docker-compose
+echo "Starting Django..."
 exec "$@"
