@@ -548,8 +548,7 @@ class FileUploadView(APIView):
         return Response({'file_path': file_path}, status=status.HTTP_201_CREATED)
     
     
-FERNET_KEY = os.getenv('FERNET_KEY')
-fernet = Fernet(FERNET_KEY)
+fernet = Fernet(settings.FERNET_KEY)
 
 @api_view(['POST'])
 def submit_problem_report(request):

@@ -314,7 +314,11 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = 52428800
 # SMS & Encryption Configuration
 AT_USERNAME = os.getenv('AT_USERNAME', 'sandbox')
 AT_API_KEY = os.getenv('AT_API_KEY', '')
-FERNET_KEY = os.getenv('FERNET_KEY', '1r5qIiRHx6Jwjl1wXDxFIppfQbMCGhlW1ScTc7tmSYs=')
+FERNET_KEY = os.getenv('FERNET_KEY')
+if ENVIRONMENT == 'production' and not FERNET_KEY:
+    raise RuntimeError('FERNET_KEY must be set in production')
+if not FERNET_KEY:
+    FERNET_KEY = '1r5qIiRHx6Jwjl1wXDxFIppfQbMCGhlW1ScTc7tmSYs='
 
 BEEM_API_KEY = os.getenv('BEEM_API_KEY', '')
 BEEM_SECRET_KEY = os.getenv('BEEM_SECRET_KEY', '')
