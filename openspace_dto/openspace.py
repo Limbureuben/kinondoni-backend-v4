@@ -76,6 +76,9 @@ class OpenspaceInputObject(graphene.InputObjectType):
     longitude = graphene.Float()
     district = graphene.String()
     street = graphene.String()
+    shape_type = graphene.String(required=True)
+    boundary = graphene.JSONString(required=True)
+    area = graphene.Float(required=True)
     
 class OpenspaceObject(graphene.ObjectType):
     id = graphene.ID()
@@ -86,6 +89,9 @@ class OpenspaceObject(graphene.ObjectType):
     street = graphene.String()
     status = graphene.String()
     is_active = graphene.Boolean()
+    shape_type = graphene.String()
+    boundary = graphene.JSONString()
+    area = graphene.Float()
     
 class ToggleOpenspaceInput(graphene.InputObjectType):
     id = graphene.ID()

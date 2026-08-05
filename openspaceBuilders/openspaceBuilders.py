@@ -232,7 +232,7 @@ class UserBuilder:
     #     return openspace
     
     @staticmethod
-    def open_space(name, latitude, longitude, district_name, street_name):
+    def open_space(name, latitude, longitude, district_name, street_name, shape_type, boundary, area):
         # Validate district by querying Ward model
         try:
             ward_instance = Ward.objects.get(name__iexact=district_name)
@@ -245,13 +245,25 @@ class UserBuilder:
         except Street.DoesNotExist:
             raise ValidationError(f"Street '{street_name}' not found in district '{district_name}'")
 
+        allowed_shapes = {'polygon', 'triangle', 'square', 'hexagon', 'decagon'}
+        if shape_type not in allowed_shapes:
+            raise ValidationError('Unsupported open-space shape')
+        if not isinstance(boundary, dict) or boundary.get('type') != 'Polygon':
+            raise ValidationError('A valid GeoJSON Polygon boundary is required')
+        rings = boundary.get('coordinates', [])
+        if not rings or len(rings[0]) < 4 or rings[0][0] != rings[0][-1]:
+            raise ValidationError('The open-space boundary must be a closed polygon')
+
         openspace = OpenSpace(
             name=name,
             latitude=latitude,
             longitude=longitude,
             district=ward_instance,   # FK to Ward model
             street=street_instance,   # FK to Street model
-            is_active=True
+            is_active=True,
+            shape_type=shape_type,
+            boundary=boundary,
+            area=area
         )
         openspace.save()
         return openspace
@@ -278,11 +290,11 @@ def register_user(input, registered_by=None):
 
 def open_space(input):
     try:
-        openspace = UserBuilder.open_space(input.name, input.latitude, input.longitude, input.district, input.street)
+        openspace = UserBuilder.open_space(input.name, input.latitude, input.longitude, input.district, input.street, input.shape_type, input.boundary, input.area)
         return OpenspaceResponse(
             message = "Openspace registred successfully",
             success=True,
-            openspace=OpenspaceObject(name=openspace.name, latitude=openspace.latitude, longitude=openspace.longitude)
+            openspace=OpenspaceObject(name=openspace.name, latitude=openspace.latitude, longitude=openspace.longitude, shape_type=openspace.shape_type, boundary=openspace.boundary, area=openspace.area)
         )
     except ValidationError as e:
         return OpenspaceResponse(message=str(e), success=False, openspace=None)

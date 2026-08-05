@@ -175,6 +175,9 @@ class OpenSpace(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='available')
     created_at = models.DateTimeField(auto_now_add=True)
     is_active = models.BooleanField(default=True)
+    shape_type = models.CharField(max_length=20, default='polygon')
+    boundary = models.JSONField(default=dict, blank=True)
+    area = models.FloatField(default=0)
     
     def __str__(self):
         return self.name
