@@ -114,11 +114,19 @@ class HistoryObject(graphene.ObjectType):
     created_at = graphene.String()
 
 class BookedOpenspaceObject(graphene.ObjectType):
+    id = graphene.ID()
     username = graphene.String()
     date = graphene.String()
     duration = graphene.String()
-    district =graphene.String()
+    startdate = graphene.String()
+    enddate = graphene.String()
+    district = graphene.String()
     purpose = graphene.String()
+    status = graphene.String()
+    space_name = graphene.String()
+
+    def resolve_space_name(self, info):
+        return self.space.name if self.space else None
     
 class UserObject(graphene.ObjectType):
     pk=graphene.ID()

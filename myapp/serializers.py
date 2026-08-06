@@ -1,4 +1,8 @@
 # serializers.py
+from datetime import timedelta
+
+from django.db import transaction
+from django.utils import timezone
 from rest_framework import serializers
 from .models import *
 
@@ -91,13 +95,29 @@ class OpenSpaceBookingSerializer(serializers.ModelSerializer):
     class Meta:
         model = OpenSpaceBooking
         fields = '__all__'
-        read_only_fields = ['user']
+        read_only_fields = ['user', 'username']
         extra_kwargs = {
             'space': {'required': False}
         }
 
     def get_space_name(self, obj):
         return obj.space.name if obj.space else None
+
+    def validate(self, attrs):
+        start_date = attrs.get('startdate')
+        end_date = attrs.get('enddate')
+        minimum_start_date = timezone.localdate() + timedelta(days=4)
+
+        if start_date and start_date < minimum_start_date:
+            raise serializers.ValidationError({
+                'startdate': 'The start date must be at least four days from today.'
+            })
+        if start_date and end_date and end_date <= start_date:
+            raise serializers.ValidationError({
+                'enddate': 'The end date must be after the start date.'
+            })
+
+        return attrs
 
     def create(self, validated_data):
         request = self.context.get('request')
@@ -106,18 +126,24 @@ class OpenSpaceBookingSerializer(serializers.ModelSerializer):
         if not space_id:
             raise serializers.ValidationError({"space": "This field is required."})
 
-        try:
-            space = OpenSpace.objects.get(id=space_id)
-        except OpenSpace.DoesNotExist:
-            raise serializers.ValidationError({"space": "Open space not found."})
+        with transaction.atomic():
+            try:
+                space = OpenSpace.objects.select_for_update().get(id=space_id)
+            except OpenSpace.DoesNotExist:
+                raise serializers.ValidationError({"space": "Open space not found."})
 
-        if space.status == 'unavailable':
-            raise serializers.ValidationError({"space": "This open space has already been booked and is unavailable."})
+            if space.status == 'unavailable':
+                raise serializers.ValidationError({
+                    "space": "This open space has already been booked and is unavailable."
+                })
 
-        validated_data.pop('space', None)
-        validated_data['user'] = request.user
-        booking = OpenSpaceBooking.objects.create(space=space, **validated_data)
-        return booking
+            validated_data.pop('space', None)
+            validated_data['username'] = request.user.username
+            validated_data['user'] = request.user
+            booking = OpenSpaceBooking.objects.create(space=space, **validated_data)
+            space.status = 'unavailable'
+            space.save(update_fields=['status'])
+            return booking
 
 
 

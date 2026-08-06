@@ -21,6 +21,7 @@ from .utils import is_explicit_image, is_inappropriate_text
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import permissions
 from .serializers import *
@@ -431,7 +432,7 @@ class QueryUsers(graphene.ObjectType):
 class BookedOpenSpaceQuery(graphene.ObjectType):
     booked_openspace = graphene.List(BookedOpenspaceObject)
     def resolve_booked_openspace(self, info):
-        return OpenSpaceBooking.objects.all()
+        return OpenSpaceBooking.objects.select_related('space').exclude(status='rejected').order_by('startdate')
 
 
 
@@ -700,6 +701,8 @@ class PasswordResetConfirmView(APIView):
 
 
 class OpenSpaceBookingView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def post(self, request):
         serializer = OpenSpaceBookingSerializer(
             data=request.data,
@@ -707,14 +710,54 @@ class OpenSpaceBookingView(APIView):
         )
 
         if serializer.is_valid():
-            # Save booking and associate with the logged-in user
-            booking = serializer.save(user=request.user)
+            # Save booking and associate it with the authenticated account.
+            try:
+                booking = serializer.save()
+            except DRFValidationError as exc:
+                detail = exc.detail
+                is_space_conflict = 'unavailable' in str(detail).lower()
 
-            # Mark the space as unavailable
-            booking.space.status = 'unavailable'
-            booking.space.save()
+                # Treat retries from the booking owner as idempotent. The first
+                # request may have completed even if the browser did not receive
+                # its response, so a retry must not look like a failed booking.
+                if is_space_conflict:
+                    existing_booking = (
+                        OpenSpaceBooking.objects
+                        .filter(
+                            space_id=request.data.get('space_id'),
+                            user=request.user
+                        )
+                        .exclude(status='rejected')
+                        .order_by('-created_at')
+                        .first()
+                    )
+                    if existing_booking:
+                        response_data = dict(
+                            OpenSpaceBookingSerializer(existing_booking).data
+                        )
+                        response_data['already_submitted'] = True
+                        response_data['message'] = (
+                            'You already have a booking request for this open space.'
+                        )
+                        return Response(response_data, status=status.HTTP_200_OK)
 
-            return Response(OpenSpaceBookingSerializer(booking).data, status=status.HTTP_201_CREATED)
+                response_detail = (
+                    dict(detail)
+                    if isinstance(detail, dict)
+                    else {'detail': detail}
+                )
+                if is_space_conflict:
+                    response_detail['code'] = 'space_unavailable'
+
+                return Response(
+                    response_detail,
+                    status=status.HTTP_409_CONFLICT if is_space_conflict else status.HTTP_400_BAD_REQUEST
+                )
+
+            return Response(
+                OpenSpaceBookingSerializer(booking).data,
+                status=status.HTTP_201_CREATED
+            )
 
         print("Booking validation errors:", serializer.errors)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
