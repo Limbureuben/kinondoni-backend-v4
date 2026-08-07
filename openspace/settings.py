@@ -40,10 +40,10 @@ env_file = env_files.get(ENVIRONMENT)
 
 if os.path.exists(env_file):
     load_dotenv(env_file)
-    print(f"✔ Loaded {ENVIRONMENT} environment from {env_file}")
+    print(f"Loaded {ENVIRONMENT} environment from {env_file}")
 else:
     load_dotenv()
-    print("⚠ No env file found, using default .env")
+    print("No environment-specific file found; using default environment variables")
 
 
 
