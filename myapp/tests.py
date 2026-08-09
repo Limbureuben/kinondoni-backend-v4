@@ -121,13 +121,36 @@ class ReportWorkflowTests(TestCase):
         self.assertNotIn('internal_comment', payload['timeline'][-1])
         self.assertEqual(payload['timeline'][-1]['public_comment'], 'Please add a closer photo.')
 
-    def test_street_leader_must_confirm_before_forwarding(self):
+    def test_street_leader_cannot_forward_an_unresolved_new_report(self):
         with self.assertRaises(ReportWorkflowError):
             perform_report_action(
                 report_id=self.report.pk,
                 actor=self.street_leader,
                 action='forward_to_ward',
             )
+
+    def test_street_confirmation_resolves_report_and_prevents_forwarding(self):
+        perform_report_action(
+            report_id=self.report.pk,
+            actor=self.street_leader,
+            action='resolve',
+            public_comment='The street office has solved this report.',
+        )
+
+        self.report.refresh_from_db()
+        self.assertEqual(self.report.status, 'resolved')
+        self.assertEqual(self.report.current_level, 'completed')
+        self.assertEqual(self.report.assigned_to, self.street_leader)
+        self.assertIsNotNone(self.report.resolved_at)
+
+        with self.assertRaises(ReportWorkflowError):
+            perform_report_action(
+                report_id=self.report.pk,
+                actor=self.street_leader,
+                action='forward_to_ward',
+            )
+
+        self.assertFalse(ReportForward.objects.filter(report=self.report).exists())
 
     def test_ward_endpoint_accepts_linked_municipal_officer_role(self):
         perform_report_action(

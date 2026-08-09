@@ -28,7 +28,7 @@ ACTION_RULES = {
         'status': 'under_review',
     },
     'request_clarification': {
-        'allowed': {'submitted', 'under_review', 'verified', 'in_progress'},
+        'allowed': {'submitted', 'under_review', 'clarification_requested', 'verified', 'in_progress'},
         'status': 'clarification_requested',
         'comment_required': True,
     },
@@ -57,7 +57,9 @@ ACTION_RULES = {
         'status': 'in_progress',
     },
     'resolve': {
-        'allowed': {'under_review', 'verified', 'in_progress'},
+        # A street leader's confirmation means the issue was solved locally.
+        # Allow that terminal transition directly from a newly submitted report.
+        'allowed': {'submitted', 'under_review', 'verified', 'in_progress'},
         'status': 'resolved',
         'level': 'completed',
         'comment_required': True,
