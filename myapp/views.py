@@ -47,6 +47,26 @@ class RegistrationMutation(graphene.Mutation):
                 registered_by, _ = user_auth_tuple
         except Exception as e:
             print("Token auth error:", str(e))
+
+        requested_role = getattr(input, 'role', 'user') or 'user'
+        from .report_workflow import officer_level
+        if requested_role in {'staff', 'ward_executive'}:
+            if not registered_by or officer_level(registered_by) != 'municipal':
+                response = RegistrationResponse(
+                    message='Only staff or an administrator can register a ward executive.',
+                    success=False,
+                    user=None,
+                )
+                return RegistrationMutation(user=None, output=response)
+        elif requested_role == 'village_chairman':
+            if not registered_by or officer_level(registered_by) != 'ward':
+                response = RegistrationResponse(
+                    message='Only a ward executive can register a street leader.',
+                    success=False,
+                    user=None,
+                )
+                return RegistrationMutation(user=None, output=response)
+
         response = register_user(input, registered_by=registered_by)
         return RegistrationMutation(user=response.user, output=response)
 
@@ -1439,8 +1459,8 @@ def forward_report_to_admin_from_village(request, forward_id):
 
     # Get the admin who registered this ward executive
     admin_user = getattr(user, 'registered_by', None)
-    municipal_roles = {'staff', 'municipal_officer'}
-    if not admin_user or getattr(admin_user, 'role', '') not in municipal_roles:
+    from .report_workflow import officer_level
+    if not admin_user or officer_level(admin_user) != 'municipal':
         return Response(
             {'error': 'No municipal officer is linked to this ward executive'},
             status=status.HTTP_400_BAD_REQUEST,
@@ -1480,7 +1500,8 @@ def forwarded_reports_to_admin(request):
     """
     user = request.user
 
-    if user.role not in {'staff', 'municipal_officer'}:
+    from .report_workflow import officer_level
+    if officer_level(user) != 'municipal':
         return Response({'error': 'Only municipal officers can access this'}, status=403)
 
     # Fetch all ReportForwardToadmin entries for this admin
@@ -1572,10 +1593,10 @@ def work_on_report(request, report_id):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def report_work_queue(request):
-    from .report_workflow import OFFICER_LEVELS, normalize_location
+    from .report_workflow import normalize_location, officer_level
 
     user = request.user
-    level = OFFICER_LEVELS.get(user.role)
+    level = officer_level(user)
     if not level:
         return Response({'error': 'Only officers can access the report work queue'}, status=403)
 
@@ -1596,8 +1617,14 @@ def report_work_queue(request):
 
 
 
+class IsMunicipalStaffPermission(permissions.BasePermission):
+    def has_permission(self, request, view):
+        from .report_workflow import officer_level
+        return bool(request.user and request.user.is_authenticated and officer_level(request.user) == 'municipal')
+
+
 class WardRegisterAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
+    permission_classes = [permissions.IsAuthenticated, IsMunicipalStaffPermission]
 
     def post(self, request):
         """
@@ -1636,7 +1663,7 @@ class IsAdminUser(permissions.BasePermission):
 
 
 class StreetRegisterAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated, IsAdminUser]
+    permission_classes = [permissions.IsAuthenticated, IsMunicipalStaffPermission]
 
     def get(self, request):
         """

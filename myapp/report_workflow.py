@@ -99,13 +99,23 @@ class ReportWorkflowError(Exception):
     pass
 
 
+def officer_level(actor):
+    """Return the workflow office for role-based and Django admin accounts."""
+    level = OFFICER_LEVELS.get(getattr(actor, 'role', None))
+    if level:
+        return level
+    if getattr(actor, 'is_staff', False) or getattr(actor, 'is_superuser', False):
+        return 'municipal'
+    return None
+
+
 def normalize_location(value):
     value = re.sub(r'\(.*?\)', '', value or '')
     return ' '.join(value.lower().split())
 
 
 def actor_can_access_report(actor, report):
-    level = OFFICER_LEVELS.get(getattr(actor, 'role', None))
+    level = officer_level(actor)
     if not level:
         return False
     if report.current_level == 'completed':
@@ -123,11 +133,11 @@ def actor_can_access_report(actor, report):
             ReportForward.objects.filter(report=report, to_user=actor).exists()
             or bool(actor.ward and normalize_location(actor.ward.name) in normalize_location(report.district))
         )
-    return actor.role in {'staff', 'municipal_officer'}
+    return level == 'municipal'
 
 
 def actor_can_view_report(actor, report):
-    if getattr(actor, 'role', None) == 'staff' or actor_can_access_report(actor, report):
+    if officer_level(actor) == 'municipal' or actor_can_access_report(actor, report):
         return True
     return (
         ReportTimeline.objects.filter(report=report, performed_by=actor).exists()
@@ -140,22 +150,14 @@ def actor_can_view_report(actor, report):
 
 def _forward_target(actor, destination_level, requested_target=None):
     if requested_target is not None:
-        expected_roles = {
-            'ward': {'ward_executive'},
-            'municipal': {'staff', 'municipal_officer'},
-        }[destination_level]
-        if requested_target.role not in expected_roles:
+        if officer_level(requested_target) != destination_level:
             raise ReportWorkflowError('The selected officer does not belong to the destination office.')
         if actor.registered_by_id and requested_target.id != actor.registered_by_id:
             raise ReportWorkflowError('The selected officer is not linked to your office.')
         return requested_target
 
     linked_officer = actor.registered_by
-    expected_roles = {
-        'ward': {'ward_executive'},
-        'municipal': {'staff', 'municipal_officer'},
-    }[destination_level]
-    if linked_officer and linked_officer.role in expected_roles:
+    if linked_officer and officer_level(linked_officer) == destination_level:
         return linked_officer
     raise ReportWorkflowError(f'No {destination_level} officer is linked to your account.')
 
@@ -215,7 +217,7 @@ def perform_report_action(
         raise ReportWorkflowError('Unsupported report action.')
 
     report = Report.objects.select_for_update().get(pk=report_id)
-    actor_level = OFFICER_LEVELS.get(getattr(actor, 'role', None))
+    actor_level = officer_level(actor)
     if not actor_level:
         raise ReportWorkflowError('Only a street, ward, or municipal officer can work on a report.')
     if not actor_can_access_report(actor, report):

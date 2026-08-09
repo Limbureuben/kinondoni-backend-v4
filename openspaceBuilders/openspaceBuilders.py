@@ -52,6 +52,7 @@ class UserBuilder:
     #     return user
     @staticmethod
     def register_user(username, password, passwordConfirm, role='user', email='', ward=None, street=None, registered_by=None):
+        email = email or ''
         if password != passwordConfirm:
             raise ValidationError("Passwords do not match")
 
@@ -274,7 +275,7 @@ def register_user(input, registered_by=None):
         role = getattr(input, 'role', 'user') or 'user'
         ward = getattr(input, 'ward', None)
         street = getattr(input, 'street', None)
-        user = UserBuilder.register_user(input.username, input.password, input.passwordConfirm, role=role, email=getattr(input, 'email', ''), ward=ward, street=street, registered_by=registered_by)
+        user = UserBuilder.register_user(input.username, input.password, input.passwordConfirm, role=role, email=getattr(input, 'email', '') or '', ward=ward, street=street, registered_by=registered_by)
         
         if hasattr(input, 'sessionId') and input.sessionId:
             Report.objects.filter(submitted_by=input.sessionId).update(submitted_by=user.id)

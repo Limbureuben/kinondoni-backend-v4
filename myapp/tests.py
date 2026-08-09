@@ -1,6 +1,7 @@
 from django.test import TestCase
 from django.urls import reverse
 from rest_framework.test import APIClient
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import (
     CustomUser,
@@ -199,6 +200,41 @@ class ReportWorkflowTests(TestCase):
         self.assertEqual(self.report.status, 'forwarded_to_municipal')
         self.assertEqual(self.report.assigned_to, self.municipal)
 
+    def test_ward_endpoint_accepts_linked_django_admin_with_default_role(self):
+        django_admin = CustomUser.objects.create_superuser(
+            username='django-admin', password='test-pass', email='admin@example.com'
+        )
+        self.assertEqual(django_admin.role, 'user')
+        self.ward_officer.registered_by = django_admin
+        self.ward_officer.save(update_fields=['registered_by'])
+
+        perform_report_action(
+            report_id=self.report.pk,
+            actor=self.street_leader,
+            action='forward_to_ward',
+        )
+        forward = ReportForward.objects.get(report=self.report, to_user=self.ward_officer)
+        client = APIClient()
+        client.force_authenticate(user=self.ward_officer)
+
+        response = client.post(
+            reverse('forward-to-admin-from-village', kwargs={'forward_id': forward.pk}),
+            {'message': 'Please review this report.'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.report.refresh_from_db()
+        self.assertEqual(self.report.status, 'forwarded_to_municipal')
+        self.assertEqual(self.report.current_level, 'municipal')
+        self.assertEqual(self.report.assigned_to, django_admin)
+
+        admin_client = APIClient()
+        admin_client.force_authenticate(user=django_admin)
+        admin_response = admin_client.get(reverse('forwarded_reports_to_admin'))
+        self.assertEqual(admin_response.status_code, 200)
+        self.assertEqual(len(admin_response.data), 1)
+
     def test_ward_endpoint_repairs_a_legacy_street_handoff(self):
         legacy_forward = ReportForward.objects.create(
             report=self.report,
@@ -289,3 +325,59 @@ class ReportWorkflowTests(TestCase):
                 actor=other_leader,
                 action='accept',
             )
+
+    def test_application_staff_and_django_admin_can_register_wards(self):
+        application_staff = CustomUser.objects.create_user(
+            username='application-staff', role='staff', password='test-pass'
+        )
+        self.assertFalse(application_staff.is_staff)
+        staff_client = APIClient()
+        staff_client.force_authenticate(user=application_staff)
+        staff_response = staff_client.post(
+            reverse('ward-register'), {'name': 'Kinondoni'}, format='json'
+        )
+        self.assertEqual(staff_response.status_code, 201, staff_response.data)
+
+        django_admin = CustomUser.objects.create_superuser(
+            username='ward-admin', password='test-pass', email='ward-admin@example.com'
+        )
+        admin_client = APIClient()
+        admin_client.force_authenticate(user=django_admin)
+        admin_response = admin_client.post(
+            reverse('ward-register'), {'name': 'Msasani'}, format='json'
+        )
+        self.assertEqual(admin_response.status_code, 201, admin_response.data)
+
+    def test_only_staff_or_admin_can_register_a_ward_executive(self):
+        application_staff = CustomUser.objects.create_user(
+            username='executive-registrar', role='staff', password='test-pass'
+        )
+        token = str(RefreshToken.for_user(application_staff).access_token)
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+        query = f'''
+            mutation {{
+              registerUser(input: {{
+                username: "new-ward-executive",
+                password: "StrongPass1!",
+                passwordConfirm: "StrongPass1!",
+                role: "ward_executive",
+                ward: "{self.ward.pk}"
+              }}) {{
+                output {{ success message user {{ id username }} }}
+              }}
+            }}
+        '''
+        response = client.post('/graphql/', {'query': query}, format='json')
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('errors', payload)
+        self.assertTrue(payload['data']['registerUser']['output']['success'])
+        executive = CustomUser.objects.get(username='new-ward-executive')
+        self.assertEqual(executive.registered_by, application_staff)
+
+        public_query = query.replace('new-ward-executive', 'unauthorized-executive')
+        public_response = APIClient().post('/graphql/', {'query': public_query}, format='json')
+        self.assertEqual(public_response.status_code, 200)
+        self.assertFalse(public_response.json()['data']['registerUser']['output']['success'])
+        self.assertFalse(CustomUser.objects.filter(username='unauthorized-executive').exists())
