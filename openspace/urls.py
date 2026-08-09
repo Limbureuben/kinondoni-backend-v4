@@ -11,9 +11,20 @@ from django.views.static import serve
 def health_check(request):
     return JsonResponse({'status': 'ok'})
 
+
+def api_root(request):
+    return JsonResponse({
+        'name': 'Kinondoni OpenSpace API',
+        'status': 'ok',
+        'health': '/health/',
+        'graphql': '/graphql/',
+        'api': '/api/v1/',
+    })
+
 # from myapp.views import verify_email
 
 urlpatterns = [
+    path('', api_root, name='api-root'),
     path('health/', health_check, name='health-check'),
     path('admin/', admin.site.urls),
     path('graphql/', csrf_exempt(GraphQLView.as_view(graphiql=settings.DEBUG))),
