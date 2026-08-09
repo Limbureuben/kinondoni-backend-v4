@@ -41,7 +41,7 @@ ACTION_RULES = {
         'status': 'verified',
     },
     'forward_to_ward': {
-        'allowed': {'submitted', 'under_review', 'clarification_requested', 'verified'},
+        'allowed': {'under_review', 'clarification_requested', 'verified'},
         'status': 'forwarded_to_ward',
         'level': 'ward',
         'actor_level': 'street',

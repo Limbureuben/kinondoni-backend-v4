@@ -1,7 +1,7 @@
 from django.test import TestCase
 
 from .models import CustomUser, Report, ReportForward, ReportForwardToadmin, Street, Ward
-from .report_workflow import ReportWorkflowError, perform_report_action
+from .report_workflow import ReportWorkflowError, actor_can_view_report, perform_report_action
 from .serializers import ReportTrackingSerializer
 
 
@@ -44,12 +44,18 @@ class ReportWorkflowTests(TestCase):
         perform_report_action(
             report_id=self.report.pk,
             actor=self.street_leader,
+            action='accept',
+        )
+        perform_report_action(
+            report_id=self.report.pk,
+            actor=self.street_leader,
             action='forward_to_ward',
         )
         self.report.refresh_from_db()
         self.assertEqual(self.report.current_level, 'ward')
         self.assertEqual(self.report.assigned_to, self.ward_officer)
         self.assertTrue(ReportForward.objects.filter(report=self.report).exists())
+        self.assertTrue(actor_can_view_report(self.street_leader, self.report))
 
         perform_report_action(
             report_id=self.report.pk,
@@ -66,6 +72,7 @@ class ReportWorkflowTests(TestCase):
         self.assertEqual(self.report.current_level, 'municipal')
         self.assertEqual(self.report.assigned_to, self.municipal)
         self.assertTrue(ReportForwardToadmin.objects.filter(report=self.report).exists())
+        self.assertTrue(actor_can_view_report(self.street_leader, self.report))
 
         perform_report_action(
             report_id=self.report.pk,
@@ -88,7 +95,7 @@ class ReportWorkflowTests(TestCase):
         self.assertEqual(self.report.current_level, 'completed')
         self.assertEqual(
             list(self.report.timeline.values_list('action', flat=True)),
-            ['submit', 'forward_to_ward', 'accept', 'forward_to_municipal', 'start_work', 'resolve', 'close'],
+            ['submit', 'accept', 'forward_to_ward', 'accept', 'forward_to_municipal', 'start_work', 'resolve', 'close'],
         )
 
     def test_required_public_update_and_internal_note_privacy(self):
@@ -111,6 +118,14 @@ class ReportWorkflowTests(TestCase):
         ).data
         self.assertNotIn('internal_comment', payload['timeline'][-1])
         self.assertEqual(payload['timeline'][-1]['public_comment'], 'Please add a closer photo.')
+
+    def test_street_leader_must_confirm_before_forwarding(self):
+        with self.assertRaises(ReportWorkflowError):
+            perform_report_action(
+                report_id=self.report.pk,
+                actor=self.street_leader,
+                action='forward_to_ward',
+            )
 
     def test_unrelated_street_leader_cannot_work_on_report(self):
         other_street = Street.objects.create(name='Kawe', ward=self.ward)
