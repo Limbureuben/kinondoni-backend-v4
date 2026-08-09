@@ -1418,15 +1418,24 @@ def forward_report_to_admin_from_village(request, forward_id):
 
     # Get the admin who registered this ward executive
     admin_user = getattr(user, 'registered_by', None)
-    if not admin_user or getattr(admin_user, 'role', '') != 'staff':
-        return Response({'error': 'No valid admin registered this ward executive'}, status=400)
+    municipal_roles = {'staff', 'municipal_officer'}
+    if not admin_user or getattr(admin_user, 'role', '') not in municipal_roles:
+        return Response(
+            {'error': 'No municipal officer is linked to this ward executive'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     # Prevent duplicate forwarding to admin
     if ReportForwardToadmin.objects.filter(report=forwarded_report.report, from_user=user, to_user=admin_user).exists():
         return Response({'error': 'This report has already been forwarded to admin'}, status=400)
 
-    from .report_workflow import ReportWorkflowError, perform_report_action
+    from .report_workflow import (
+        ReportWorkflowError,
+        perform_report_action,
+        reconcile_legacy_ward_handoff,
+    )
     try:
+        reconcile_legacy_ward_handoff(forwarded_report)
         perform_report_action(
             report_id=forwarded_report.report_id,
             actor=user,

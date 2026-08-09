@@ -155,6 +155,53 @@ def _forward_target(actor, destination_level, requested_target=None):
 
 
 @transaction.atomic
+def reconcile_legacy_ward_handoff(forward_record):
+    """Repair canonical workflow fields for handoffs created by the legacy endpoint."""
+    report = Report.objects.select_for_update().get(pk=forward_record.report_id)
+    if report.current_level not in {'street', 'ward'}:
+        return report
+
+    old_status = report.status
+    old_level = report.current_level
+    update_fields = []
+    if report.current_level == 'street':
+        report.current_level = 'ward'
+        report.status = 'forwarded_to_ward'
+        update_fields.extend(('current_level', 'status'))
+    elif report.status == 'submitted':
+        report.status = 'forwarded_to_ward'
+        update_fields.append('status')
+    if old_level == 'street' and report.assigned_to_id != forward_record.to_user_id:
+        report.assigned_to_id = forward_record.to_user_id
+        update_fields.append('assigned_to')
+    elif report.assigned_to_id is None:
+        report.assigned_to_id = forward_record.to_user_id
+        update_fields.append('assigned_to')
+
+    if update_fields:
+        update_fields.append('updated_at')
+        report.save(update_fields=update_fields)
+    if old_level == 'street' and not ReportTimeline.objects.filter(
+        report=report,
+        action='forward_to_ward',
+        to_level='ward',
+    ).exists():
+        ReportTimeline.objects.create(
+            report=report,
+            action='forward_to_ward',
+            from_status=old_status,
+            to_status='forwarded_to_ward',
+            from_level='street',
+            to_level='ward',
+            performed_by=forward_record.from_user,
+            performed_by_role=getattr(forward_record.from_user, 'role', ''),
+            public_comment=ACTION_MESSAGES['forward_to_ward'],
+            metadata={'assigned_to_id': forward_record.to_user_id},
+        )
+    return report
+
+
+@transaction.atomic
 def perform_report_action(
     *, report_id, actor, action, public_comment='', internal_comment='', priority=None, target=None
 ):

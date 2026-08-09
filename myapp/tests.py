@@ -1,4 +1,6 @@
 from django.test import TestCase
+from django.urls import reverse
+from rest_framework.test import APIClient
 
 from .models import CustomUser, Report, ReportForward, ReportForwardToadmin, Street, Ward
 from .report_workflow import ReportWorkflowError, actor_can_view_report, perform_report_action
@@ -126,6 +128,55 @@ class ReportWorkflowTests(TestCase):
                 actor=self.street_leader,
                 action='forward_to_ward',
             )
+
+    def test_ward_endpoint_accepts_linked_municipal_officer_role(self):
+        perform_report_action(
+            report_id=self.report.pk,
+            actor=self.street_leader,
+            action='accept',
+        )
+        perform_report_action(
+            report_id=self.report.pk,
+            actor=self.street_leader,
+            action='forward_to_ward',
+        )
+        forward = ReportForward.objects.get(report=self.report, to_user=self.ward_officer)
+        client = APIClient()
+        client.force_authenticate(user=self.ward_officer)
+
+        response = client.post(
+            reverse('forward-to-admin-from-village', kwargs={'forward_id': forward.pk}),
+            {'message': 'Please continue this report at municipal level.'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.report.refresh_from_db()
+        self.assertEqual(self.report.status, 'forwarded_to_municipal')
+        self.assertEqual(self.report.assigned_to, self.municipal)
+
+    def test_ward_endpoint_repairs_a_legacy_street_handoff(self):
+        legacy_forward = ReportForward.objects.create(
+            report=self.report,
+            from_user=self.street_leader,
+            to_user=self.ward_officer,
+        )
+        client = APIClient()
+        client.force_authenticate(user=self.ward_officer)
+
+        response = client.post(
+            reverse('forward-to-admin-from-village', kwargs={'forward_id': legacy_forward.pk}),
+            {'message': 'Forward this legacy report to municipal.'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.report.refresh_from_db()
+        self.assertEqual(self.report.current_level, 'municipal')
+        self.assertEqual(self.report.assigned_to, self.municipal)
+        self.assertTrue(
+            self.report.timeline.filter(action='forward_to_ward', to_level='ward').exists()
+        )
 
     def test_unrelated_street_leader_cannot_work_on_report(self):
         other_street = Street.objects.create(name='Kawe', ward=self.ward)
