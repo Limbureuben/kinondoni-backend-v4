@@ -16,6 +16,52 @@ from .report_workflow import ReportWorkflowError, actor_can_view_report, perform
 from .serializers import ReportTrackingSerializer
 
 
+class UserProfileApiTests(TestCase):
+    def setUp(self):
+        self.user = CustomUser.objects.create_user(
+            username='profile-user',
+            email='old@example.com',
+            role='user',
+            password='test-pass',
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def test_authenticated_user_can_update_username_and_email(self):
+        response = self.client.patch(
+            reverse('user-profile'),
+            {'username': 'updated-user', 'email': 'new@example.com'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.username, 'updated-user')
+        self.assertEqual(self.user.email, 'new@example.com')
+        self.assertEqual(response.data['username'], 'updated-user')
+        self.assertEqual(response.data['email'], 'new@example.com')
+
+    def test_profile_update_cannot_change_role(self):
+        response = self.client.patch(
+            reverse('user-profile'),
+            {'role': 'staff'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.role, 'user')
+
+    def test_profile_update_requires_authentication(self):
+        response = APIClient().patch(
+            reverse('user-profile'),
+            {'username': 'not-allowed'},
+            format='json',
+        )
+
+        self.assertIn(response.status_code, (401, 403))
+
+
 class ReportWorkflowTests(TestCase):
     def setUp(self):
         self.ward = Ward.objects.create(name='Mikocheni')

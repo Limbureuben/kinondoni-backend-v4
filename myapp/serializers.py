@@ -81,6 +81,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
         fields = ['username', 'email', 'role', 'profile_image']
+        read_only_fields = ['role', 'profile_image']
 
     def get_profile_image(self, obj):
         request = self.context.get('request')
