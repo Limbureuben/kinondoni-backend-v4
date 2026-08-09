@@ -1231,9 +1231,15 @@ def reports_by_street_name_match(request):
     # Match using __icontains for more flexible match
     reports = Report.objects.annotate(
         street_lower=Lower('street')
-    ).filter(street_lower__icontains=user_street_name).order_by('-created_at')
+    ).filter(
+        street_lower__icontains=user_street_name
+    ).exclude(
+        status__in=('resolved', 'closed', 'rejected')
+    ).select_related('assigned_to').prefetch_related(
+        'timeline__performed_by'
+    ).order_by('-updated_at')
 
-    serializer = ReportSerializer(reports, many=True)
+    serializer = ReportTrackingSerializer(reports, many=True)
     return Response(serializer.data, status=status.HTTP_200_OK)
 
 
@@ -1310,6 +1316,13 @@ def reply_to_report(request, report_id):
     except Report.DoesNotExist:
         return Response({'error': 'Report not found'}, status=status.HTTP_404_NOT_FOUND)
 
+    from .report_workflow import actor_can_access_report
+    if not actor_can_access_report(user, report):
+        return Response(
+            {'error': 'This report is no longer assigned to your office. You can only track its status.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
     message = request.data.get('message', '').strip()
     if not message:
         return Response({'error': 'Message cannot be empty'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1372,7 +1385,9 @@ def forwarded_reports_for_ward(request):
     forwarded = (
         ReportForward.objects
         .filter(to_user=user)
+        .exclude(report__status__in=('resolved', 'closed', 'rejected'))
         .select_related('report', 'from_user')
+        .prefetch_related('report__timeline__performed_by')
         .order_by('-forwarded_at')
     )
 
@@ -1380,6 +1395,7 @@ def forwarded_reports_for_ward(request):
     for f in forwarded:
         reports_data.append({
             'id': f.id,  # <-- Forward record ID (needed for forwarding to admin)
+            'report_pk': f.report_id,
             'report_id': f.report.report_id,
             'space_name': f.report.space_name,
             'district': f.report.district,
@@ -1387,6 +1403,11 @@ def forwarded_reports_for_ward(request):
             'description': f.report.description,
             'from_user': f.from_user.username if f.from_user else None,
             'forwarded_at': f.forwarded_at,
+            'status': f.report.status,
+            'status_label': f.report.get_status_display(),
+            'current_level': f.report.current_level,
+            'level_label': f.report.get_current_level_display(),
+            'timeline': ReportTimelineSerializer(f.report.timeline.all(), many=True).data,
             # Check if already forwarded to admin by this ward executive
             'forwarded_to_admin': ReportForwardToadmin.objects.filter(
                 report=f.report,
@@ -1459,13 +1480,14 @@ def forwarded_reports_to_admin(request):
     """
     user = request.user
 
-    if user.role != 'staff':  # only admins
-        return Response({'error': 'Only admin users can access this'}, status=403)
+    if user.role not in {'staff', 'municipal_officer'}:
+        return Response({'error': 'Only municipal officers can access this'}, status=403)
 
     # Fetch all ReportForwardToadmin entries for this admin
     forwarded = (
         ReportForwardToadmin.objects
         .filter(to_user=user)
+        .exclude(report__status__in=('resolved', 'closed', 'rejected'))
         .select_related('report', 'from_user')
         .order_by('-forwarded_at')
     )

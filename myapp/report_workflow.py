@@ -9,6 +9,7 @@ from .models import (
     Report,
     ReportForward,
     ReportForwardToadmin,
+    ReportHistory,
     ReportTimeline,
 )
 
@@ -28,7 +29,7 @@ ACTION_RULES = {
         'status': 'under_review',
     },
     'request_clarification': {
-        'allowed': {'submitted', 'under_review', 'clarification_requested', 'verified', 'in_progress'},
+        'allowed': {'submitted', 'under_review', 'verified', 'in_progress'},
         'status': 'clarification_requested',
         'comment_required': True,
     },
@@ -41,7 +42,7 @@ ACTION_RULES = {
         'status': 'verified',
     },
     'forward_to_ward': {
-        'allowed': {'under_review', 'clarification_requested', 'verified'},
+        'allowed': {'submitted', 'under_review', 'clarification_requested', 'verified'},
         'status': 'forwarded_to_ward',
         'level': 'ward',
         'actor_level': 'street',
@@ -57,9 +58,12 @@ ACTION_RULES = {
         'status': 'in_progress',
     },
     'resolve': {
-        # A street leader's confirmation means the issue was solved locally.
-        # Allow that terminal transition directly from a newly submitted report.
-        'allowed': {'submitted', 'under_review', 'verified', 'in_progress'},
+        # Confirmation at the currently assigned office means the issue was solved.
+        # Reports can therefore be resolved at any level without another handoff.
+        'allowed': {
+            'submitted', 'forwarded_to_ward', 'forwarded_to_municipal',
+            'under_review', 'clarification_requested', 'verified', 'in_progress',
+        },
         'status': 'resolved',
         'level': 'completed',
         'comment_required': True,
@@ -279,6 +283,15 @@ def perform_report_action(
         internal_comment=internal_comment,
         metadata={'assigned_to_id': assignee.id if assignee else None},
     )
+
+    if new_status == 'resolved' and not ReportHistory.objects.filter(report_id=report.report_id).exists():
+        ReportHistory.objects.create(
+            report_id=report.report_id,
+            description=report.description,
+            email=report.email,
+            file=report.file.name if report.file else None,
+            user=report.user,
+        )
 
     if report.user_id:
         Notification.objects.create(

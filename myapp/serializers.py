@@ -232,6 +232,7 @@ class ReportTrackingSerializer(serializers.ModelSerializer):
         model = Report
         fields = [
             'id', 'report_id', 'space_name', 'district', 'street', 'description',
+            'email', 'file', 'latitude', 'longitude',
             'status', 'status_label', 'current_level', 'level_label', 'priority',
             'assigned_officer', 'created_at', 'updated_at', 'resolved_at', 'timeline',
         ]

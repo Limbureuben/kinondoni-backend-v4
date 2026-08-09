@@ -2,7 +2,15 @@ from django.test import TestCase
 from django.urls import reverse
 from rest_framework.test import APIClient
 
-from .models import CustomUser, Report, ReportForward, ReportForwardToadmin, Street, Ward
+from .models import (
+    CustomUser,
+    Report,
+    ReportForward,
+    ReportForwardToadmin,
+    ReportHistory,
+    Street,
+    Ward,
+)
 from .report_workflow import ReportWorkflowError, actor_can_view_report, perform_report_action
 from .serializers import ReportTrackingSerializer
 
@@ -121,12 +129,24 @@ class ReportWorkflowTests(TestCase):
         self.assertNotIn('internal_comment', payload['timeline'][-1])
         self.assertEqual(payload['timeline'][-1]['public_comment'], 'Please add a closer photo.')
 
-    def test_street_leader_cannot_forward_an_unresolved_new_report(self):
+    def test_street_can_forward_new_report_then_only_track_it(self):
+        perform_report_action(
+            report_id=self.report.pk,
+            actor=self.street_leader,
+            action='forward_to_ward',
+        )
+
+        self.report.refresh_from_db()
+        self.assertEqual(self.report.status, 'forwarded_to_ward')
+        self.assertEqual(self.report.current_level, 'ward')
+        self.assertTrue(actor_can_view_report(self.street_leader, self.report))
+
         with self.assertRaises(ReportWorkflowError):
             perform_report_action(
                 report_id=self.report.pk,
                 actor=self.street_leader,
-                action='forward_to_ward',
+                action='resolve',
+                public_comment='This must be handled by the current office.',
             )
 
     def test_street_confirmation_resolves_report_and_prevents_forwarding(self):
@@ -142,6 +162,7 @@ class ReportWorkflowTests(TestCase):
         self.assertEqual(self.report.current_level, 'completed')
         self.assertEqual(self.report.assigned_to, self.street_leader)
         self.assertIsNotNone(self.report.resolved_at)
+        self.assertTrue(ReportHistory.objects.filter(report_id=self.report.report_id).exists())
 
         with self.assertRaises(ReportWorkflowError):
             perform_report_action(
@@ -200,6 +221,61 @@ class ReportWorkflowTests(TestCase):
         self.assertTrue(
             self.report.timeline.filter(action='forward_to_ward', to_level='ward').exists()
         )
+
+    def test_forwarded_reports_are_tracking_only_and_resolved_reports_leave_all_queues(self):
+        perform_report_action(
+            report_id=self.report.pk,
+            actor=self.street_leader,
+            action='forward_to_ward',
+        )
+
+        street_client = APIClient()
+        street_client.force_authenticate(user=self.street_leader)
+        street_response = street_client.get(reverse('reports-by-street'))
+        self.assertEqual(street_response.status_code, 200)
+        self.assertEqual(len(street_response.data), 1)
+        self.assertEqual(street_response.data[0]['current_level'], 'ward')
+
+        ward_client = APIClient()
+        ward_client.force_authenticate(user=self.ward_officer)
+        ward_response = ward_client.get(reverse('forwarded-reports-for-ward'))
+        self.assertEqual(ward_response.status_code, 200)
+        self.assertEqual(len(ward_response.data), 1)
+        self.assertEqual(ward_response.data[0]['current_level'], 'ward')
+
+        perform_report_action(
+            report_id=self.report.pk,
+            actor=self.ward_officer,
+            action='forward_to_municipal',
+        )
+        ward_response = ward_client.get(reverse('forwarded-reports-for-ward'))
+        self.assertEqual(len(ward_response.data), 1)
+        self.assertEqual(ward_response.data[0]['current_level'], 'municipal')
+        self.assertTrue(ward_response.data[0]['forwarded_to_admin'])
+
+        denied_response = ward_client.post(
+            reverse('work-on-report', kwargs={'report_id': self.report.pk}),
+            {'action': 'resolve', 'public_comment': 'Ward must no longer act.'},
+            format='json',
+        )
+        self.assertEqual(denied_response.status_code, 400)
+
+        perform_report_action(
+            report_id=self.report.pk,
+            actor=self.municipal,
+            action='resolve',
+            public_comment='The municipal office solved the report.',
+        )
+
+        self.assertEqual(len(street_client.get(reverse('reports-by-street')).data), 0)
+        self.assertEqual(len(ward_client.get(reverse('forwarded-reports-for-ward')).data), 0)
+
+        municipal_client = APIClient()
+        municipal_client.force_authenticate(user=self.municipal)
+        municipal_response = municipal_client.get(reverse('forwarded_reports_to_admin'))
+        self.assertEqual(municipal_response.status_code, 200)
+        self.assertEqual(len(municipal_response.data), 0)
+        self.assertTrue(ReportHistory.objects.filter(report_id=self.report.report_id).exists())
 
     def test_unrelated_street_leader_cannot_work_on_report(self):
         other_street = Street.objects.create(name='Kawe', ward=self.ward)
