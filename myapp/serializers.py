@@ -173,6 +173,10 @@ class ReportSerializer(serializers.ModelSerializer):
     class Meta:
         model = Report
         fields = '__all__'
+        read_only_fields = [
+            'report_id', 'user', 'status', 'current_level', 'priority',
+            'assigned_to', 'created_at', 'updated_at', 'resolved_at',
+        ]
         
         
 class ProblemReportSerializer(serializers.ModelSerializer):
@@ -186,11 +190,72 @@ class ReportSerializer(serializers.ModelSerializer):
     class Meta:
         model = Report
         fields = '__all__'
+        read_only_fields = [
+            'report_id', 'user', 'status', 'current_level', 'priority',
+            'assigned_to', 'created_at', 'updated_at', 'resolved_at',
+        ]
 
     def create(self, validated_data):
         if 'report_id' not in validated_data:
             validated_data['report_id'] = ''.join(random.choices(string.digits, k=8))
         return super().create(validated_data)
+
+
+class ReportTimelineSerializer(serializers.ModelSerializer):
+    action_label = serializers.CharField(source='get_action_display', read_only=True)
+    status_label = serializers.CharField(source='get_to_status_display', read_only=True)
+    level_label = serializers.CharField(source='get_to_level_display', read_only=True)
+    officer_name = serializers.SerializerMethodField()
+    officer_role = serializers.CharField(source='performed_by_role', read_only=True)
+
+    class Meta:
+        model = ReportTimeline
+        fields = [
+            'id', 'action', 'action_label', 'from_status', 'to_status',
+            'status_label', 'from_level', 'to_level', 'level_label',
+            'officer_name', 'officer_role', 'public_comment', 'created_at',
+        ]
+
+    def get_officer_name(self, obj):
+        if not obj.performed_by:
+            return None
+        return obj.performed_by.get_full_name() or obj.performed_by.username
+
+
+class ReportTrackingSerializer(serializers.ModelSerializer):
+    status_label = serializers.CharField(source='get_status_display', read_only=True)
+    level_label = serializers.CharField(source='get_current_level_display', read_only=True)
+    assigned_officer = serializers.SerializerMethodField()
+    timeline = ReportTimelineSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Report
+        fields = [
+            'id', 'report_id', 'space_name', 'district', 'street', 'description',
+            'status', 'status_label', 'current_level', 'level_label', 'priority',
+            'assigned_officer', 'created_at', 'updated_at', 'resolved_at', 'timeline',
+        ]
+
+    def get_assigned_officer(self, obj):
+        if not obj.assigned_to:
+            return None
+        return {
+            'id': obj.assigned_to_id,
+            'name': obj.assigned_to.get_full_name() or obj.assigned_to.username,
+            'role': obj.assigned_to.role,
+        }
+
+
+class ReportActionSerializer(serializers.Serializer):
+    action = serializers.ChoiceField(
+        choices=[choice for choice in ReportTimeline.ACTION_CHOICES if choice[0] != 'submit']
+    )
+    public_comment = serializers.CharField(required=False, allow_blank=True, max_length=2000)
+    internal_comment = serializers.CharField(required=False, allow_blank=True, max_length=4000)
+    priority = serializers.ChoiceField(choices=Report.PRIORITY_CHOICES, required=False)
+    assigned_to = serializers.PrimaryKeyRelatedField(
+        queryset=CustomUser.objects.all(), required=False, allow_null=True
+    )
 
 
 # class ReportReplySerializer(serializers.ModelSerializer):

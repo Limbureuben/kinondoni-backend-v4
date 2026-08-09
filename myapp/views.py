@@ -1087,8 +1087,13 @@ class UserReportHistoryAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        reports = Report.objects.filter(user=request.user).order_by('-created_at')
-        serializer = ReportSerializer(reports, many=True)
+        reports = (
+            Report.objects.filter(user=request.user)
+            .select_related('assigned_to')
+            .prefetch_related('timeline__performed_by')
+            .order_by('-created_at')
+        )
+        serializer = ReportTrackingSerializer(reports, many=True)
         return Response(serializer.data)
 
 
@@ -1201,7 +1206,10 @@ def create_report(request):
         report = serializer.save(user=user)
         return Response({
             'message': 'Report submitted successfully',
-            'reportId': report.report_id
+            'reportId': report.report_id,
+            'id': report.id,
+            'status': report.status,
+            'currentLevel': report.current_level,
         }, status=status.HTTP_201_CREATED)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1270,16 +1278,18 @@ def forward_report_to_ward_exec(request, report_id):
     if not ward_exec or ward_exec.role != 'ward_executive':
         return Response({'error': 'No ward executive assigned'}, status=status.HTTP_400_BAD_REQUEST)
 
-    # Create forwarding record
     message = request.data.get('message', '')
-    forward_record = ReportForward.objects.create(
-        report=report,
-        from_user=user,
-        to_user=ward_exec
-    )
-
-    # Log forwarding for debugging
-    print(f"Report '{report.report_id}' forwarded from '{user.username}' to '{ward_exec.username}'")
+    from .report_workflow import ReportWorkflowError, perform_report_action
+    try:
+        perform_report_action(
+            report_id=report.pk,
+            actor=user,
+            action='forward_to_ward',
+            public_comment=message,
+            target=ward_exec,
+        )
+    except ReportWorkflowError as exc:
+        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
     return Response({'success': f"Report forwarded to {ward_exec.username}"}, status=status.HTTP_200_OK)
 
@@ -1415,12 +1425,17 @@ def forward_report_to_admin_from_village(request, forward_id):
     if ReportForwardToadmin.objects.filter(report=forwarded_report.report, from_user=user, to_user=admin_user).exists():
         return Response({'error': 'This report has already been forwarded to admin'}, status=400)
 
-    # Create forward entry
-    ReportForwardToadmin.objects.create(
-        report=forwarded_report.report,
-        from_user=user,
-        to_user=admin_user,
-    )
+    from .report_workflow import ReportWorkflowError, perform_report_action
+    try:
+        perform_report_action(
+            report_id=forwarded_report.report_id,
+            actor=user,
+            action='forward_to_municipal',
+            public_comment=request.data.get('message', ''),
+            target=admin_user,
+        )
+    except ReportWorkflowError as exc:
+        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
     return Response({'success': f"Report forwarded to admin {admin_user.username}"}, status=200)
 
@@ -1464,6 +1479,89 @@ def forwarded_reports_to_admin(request):
         })
 
     return Response(reports_data, status=200)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def report_timeline(request, report_id):
+    from .report_workflow import actor_can_view_report
+
+    try:
+        report = (
+            Report.objects.select_related('assigned_to', 'user')
+            .prefetch_related('timeline__performed_by')
+            .get(pk=report_id)
+        )
+    except Report.DoesNotExist:
+        return Response({'error': 'Report not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    is_reporter = report.user_id == request.user.id
+    if not is_reporter and not actor_can_view_report(request.user, report):
+        return Response(
+            {'error': 'You do not have permission to view this report timeline'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return Response(ReportTrackingSerializer(report).data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def work_on_report(request, report_id):
+    from .report_workflow import ReportWorkflowError, perform_report_action
+
+    serializer = ReportActionSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    data = serializer.validated_data
+    try:
+        report, timeline = perform_report_action(
+            report_id=report_id,
+            actor=request.user,
+            action=data['action'],
+            public_comment=data.get('public_comment', ''),
+            internal_comment=data.get('internal_comment', ''),
+            priority=data.get('priority'),
+            target=data.get('assigned_to'),
+        )
+    except Report.DoesNotExist:
+        return Response({'error': 'Report not found'}, status=status.HTTP_404_NOT_FOUND)
+    except ReportWorkflowError as exc:
+        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response({
+        'message': 'Report updated successfully',
+        'report': ReportTrackingSerializer(
+            Report.objects.select_related('assigned_to')
+            .prefetch_related('timeline__performed_by')
+            .get(pk=report.pk)
+        ).data,
+        'timelineEventId': timeline.id,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def report_work_queue(request):
+    from .report_workflow import OFFICER_LEVELS, normalize_location
+
+    user = request.user
+    level = OFFICER_LEVELS.get(user.role)
+    if not level:
+        return Response({'error': 'Only officers can access the report work queue'}, status=403)
+
+    reports = Report.objects.filter(current_level=level).select_related('assigned_to')
+    if user.role != 'staff':
+        reports = reports.filter(Q(assigned_to=user) | Q(assigned_to__isnull=True))
+    if level == 'street' and user.street:
+        reports = reports.filter(street__icontains=normalize_location(user.street.name))
+    elif level == 'ward' and user.ward:
+        reports = reports.filter(
+            Q(district__icontains=user.ward.name) | Q(forwards__to_user=user)
+        ).distinct()
+
+    return Response(ReportTrackingSerializer(
+        reports.prefetch_related('timeline__performed_by').order_by('-updated_at'),
+        many=True,
+    ).data)
 
 
 

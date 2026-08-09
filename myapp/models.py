@@ -59,6 +59,31 @@ class Street(models.Model):
 
 
 class Report(models.Model):
+    STATUS_CHOICES = (
+        ('submitted', 'Submitted'),
+        ('under_review', 'Under review'),
+        ('clarification_requested', 'Clarification requested'),
+        ('verified', 'Verified'),
+        ('forwarded_to_ward', 'Forwarded to ward'),
+        ('forwarded_to_municipal', 'Forwarded to municipal'),
+        ('in_progress', 'Work in progress'),
+        ('resolved', 'Resolved'),
+        ('closed', 'Closed'),
+        ('rejected', 'Rejected'),
+    )
+    LEVEL_CHOICES = (
+        ('street', 'Street office'),
+        ('ward', 'Ward office'),
+        ('municipal', 'Municipal office'),
+        ('completed', 'Completed'),
+    )
+    PRIORITY_CHOICES = (
+        ('low', 'Low'),
+        ('medium', 'Medium'),
+        ('high', 'High'),
+        ('urgent', 'Urgent'),
+    )
+
     report_id = models.CharField(max_length=8, unique=True, editable=False)
     description = models.TextField()
     email = models.EmailField(blank=True, null=True)
@@ -71,6 +96,18 @@ class Report(models.Model):
     latitude = models.FloatField(null=True, blank=True)
     longitude = models.FloatField(null=True, blank=True)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    status = models.CharField(max_length=32, choices=STATUS_CHOICES, default='submitted', db_index=True)
+    current_level = models.CharField(max_length=20, choices=LEVEL_CHOICES, default='street', db_index=True)
+    priority = models.CharField(max_length=10, choices=PRIORITY_CHOICES, default='medium')
+    assigned_to = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='assigned_reports',
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
 
     def save(self, *args, **kwargs):
         is_new = not self.pk
@@ -142,6 +179,7 @@ class CustomUser(AbstractUser):
         ('staff', 'Staff'),
         ('ward_executive', 'Ward Executive'),
         ('village_chairman', 'Village Chairman'),
+        ('municipal_officer', 'Municipal Officer'),
         ('user', 'User'),
     )
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='user')
@@ -159,6 +197,48 @@ class CustomUser(AbstractUser):
     
     def __str__(self):
         return f"{self.username} ({self.role})"
+
+
+class ReportTimeline(models.Model):
+    ACTION_CHOICES = (
+        ('submit', 'Submitted'),
+        ('accept', 'Accepted for review'),
+        ('request_clarification', 'Clarification requested'),
+        ('add_note', 'Progress note added'),
+        ('verify', 'Verified'),
+        ('forward_to_ward', 'Forwarded to ward'),
+        ('forward_to_municipal', 'Forwarded to municipal'),
+        ('start_work', 'Work started'),
+        ('resolve', 'Resolved'),
+        ('close', 'Closed'),
+        ('reject', 'Rejected'),
+    )
+
+    report = models.ForeignKey(Report, on_delete=models.CASCADE, related_name='timeline')
+    action = models.CharField(max_length=32, choices=ACTION_CHOICES)
+    from_status = models.CharField(max_length=32, choices=Report.STATUS_CHOICES)
+    to_status = models.CharField(max_length=32, choices=Report.STATUS_CHOICES)
+    from_level = models.CharField(max_length=20, choices=Report.LEVEL_CHOICES)
+    to_level = models.CharField(max_length=20, choices=Report.LEVEL_CHOICES)
+    performed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='report_timeline_actions',
+    )
+    performed_by_role = models.CharField(max_length=32, blank=True)
+    public_comment = models.TextField(blank=True)
+    internal_comment = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ('created_at', 'id')
+        indexes = [models.Index(fields=('report', 'created_at'))]
+
+    def __str__(self):
+        return f"{self.report.report_id}: {self.action}"
 
 
 class OpenSpace(models.Model):

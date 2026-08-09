@@ -16,8 +16,31 @@ admin.site.register(OpenSpace, OpenSpaceAdmin)
 
 
 class ReportAdmin(admin.ModelAdmin):
-    list_display = ('id','report_id','description', 'space_name', 'district', 'street', 'email', 'file', 'created_at', 'latitude', 'longitude','user')
+    list_display = ('id', 'report_id', 'status', 'current_level', 'priority', 'assigned_to', 'space_name', 'street', 'created_at', 'user')
+    list_filter = ('status', 'current_level', 'priority')
+    search_fields = ('report_id', 'description', 'space_name', 'street', 'email')
 admin.site.register(Report, ReportAdmin)
+
+
+@admin.register(ReportTimeline)
+class ReportTimelineAdmin(admin.ModelAdmin):
+    list_display = ('report', 'action', 'from_level', 'to_level', 'performed_by', 'created_at')
+    list_filter = ('action', 'to_level', 'to_status')
+    search_fields = ('report__report_id', 'public_comment', 'internal_comment')
+    readonly_fields = (
+        'report', 'action', 'from_status', 'to_status', 'from_level', 'to_level',
+        'performed_by', 'performed_by_role', 'public_comment', 'internal_comment',
+        'metadata', 'created_at',
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 class ReportHistoryAdmin(admin.ModelAdmin):
     list_display = ('report_id','description', 'email', 'file', 'user', 'created_at')
